@@ -1,0 +1,223 @@
+.memox-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.memox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid #252526;
+}
+
+.memox-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.memox-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.memox-connection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.memox-connection.offline {
+  color: #4ec9b0;
+}
+
+.memox-connection.online {
+  color: #569cd6;
+}
+
+.memox-icon {
+  width: 20px;
+  height: 20px;
+  color: #569cd6;
+}
+
+.memox-icon-small {
+  width: 14px;
+  height: 14px;
+}
+
+.memox-icon-small.error {
+  color: #f48771;
+}
+
+.memox-settings {
+  color: #d4d4d4;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.memox-settings:hover {
+  color: white;
+}
+
+.memox-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.memox-message {
+  display: flex;
+}
+
+.memox-message.user {
+  justify-content: flex-end;
+}
+
+.memox-message.ai {
+  justify-content: flex-start;
+}
+
+.memox-message-content {
+  max-width: 85%;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.memox-message-content.user {
+  background-color: #0e639c;
+  color: white;
+}
+
+.memox-message-content.ai {
+  background-color: #252526;
+}
+
+.memox-message-text {
+  word-wrap: break-word;
+}
+
+.memox-code-snippet {
+  margin-top: 8px;
+  background-color: #1e1e1e;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.memox-code-header {
+  color: #569cd6;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: monospace;
+}
+
+.memox-code-content {
+  color: #d4d4d4;
+  margin: 0;
+  font-family: monospace;
+  white-space: pre;
+}
+
+.memox-message-footer {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memox-loading {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.memox-loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #569cd6;
+  animation: bounce 1.4s infinite ease-in-out;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.memox-input-container {
+  padding: 12px;
+  border-top: 1px solid #252526;
+}
+
+.memox-input-wrapper {
+  position: relative;
+}
+
+.memox-textarea {
+  width: 100%;
+  background-color: #252526;
+  border-radius: 8px;
+  padding: 12px 40px 12px 12px;
+  color: #d4d4d4;
+  font-size: 14px;
+  resize: none;
+  border: none;
+  outline: none;
+  min-height: 44px;
+  max-height: 120px;
+  line-height: 1.5;
+}
+
+.memox-textarea:focus {
+  box-shadow: 0 0 0 1px #569cd6;
+}
+
+.memox-send-button {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 4px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #569cd6;
+}
+
+.memox-send-button.disabled {
+  color: #5a5a5a;
+  cursor: not-allowed;
+}
+
+.memox-send-button:not(.disabled):hover {
+  background-color: #2a2d2e;
+}
+
+.memox-input-footer {
+  font-size: 11px;
+  color: #5a5a5a;
+  margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+}
