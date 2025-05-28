@@ -10,7 +10,9 @@ module.exports = {
     libraryTarget: 'commonjs2'
   },
   externals: {
-    vscode: 'commonjs vscode'
+    vscode: 'commonjs vscode',
+    'onnxruntime-node': 'commonjs onnxruntime-node',
+    sharp: 'commonjs sharp'
   },
   resolve: {
     extensions: ['.ts', '.js']
@@ -20,9 +22,13 @@ module.exports = {
       {
         test: /\.ts$/,
         exclude: /node_modules/,
-        use: 'ts-loader'
+        use: [
+          {
+            loader: 'ts-loader'
+          }
+        ]
       }
     ]
   },
-  devtool: 'source-map'
+  devtool: 'nosources-source-map'
 };

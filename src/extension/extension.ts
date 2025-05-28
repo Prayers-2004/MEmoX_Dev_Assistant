@@ -5,6 +5,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getNonce } from './utils';
 import fetch from 'node-fetch';
+import { RAGManager } from './rag/ragManager';
+import { pipeline } from '@xenova/transformers';
 
 const execAsync = promisify(exec);
 
@@ -45,15 +47,34 @@ let ollamaStatus = {
 
 let repoIndex: RepoIndex = {};
 
+let ragManager: RAGManager;
+
 // Use the provided API key and endpoint for cloud fallback
 const OPENAI_API_KEY = 'sk-sBl5ipZbLl6B4vYdV09MGNEqbZ33QPjBSVfucxwqkpnlH7Jt';
 const OPENAI_API_URL = 'https://api.chatanywhere.tech/v1/chat/completions';
 
+let localLLM: any = null;
+let localLLMLoading: Promise<any> | null = null;
+
 export function activate(context: vscode.ExtensionContext) {
     let chatPanel: vscode.WebviewPanel | undefined;
 
+    // Initialize RAG system and index workspace
+    ragManager = new RAGManager(context);
+    ragManager.initialize().then(async () => {
+        // Initialize both indexing systems
+        await Promise.all([
+            ragManager.indexWorkspace(),
+            scanWorkspace() // Keep this for now to maintain repoIndex
+        ]);
+        console.log('Memox RAG system initialized and workspace indexing started.');
+    }).catch(error => {
+        console.error('Failed to initialize RAG system or index workspace:', error);
+    });
+
     checkOllamaStatus();
-    scanWorkspace(); // Start scanning the workspace on activation
+    // Remove or comment out the call to the old scanWorkspace()
+    // scanWorkspace(); // Start scanning the workspace on activation
 
     let disposable = vscode.commands.registerCommand('memox.openChat', () => {
         if (chatPanel) {
@@ -85,14 +106,18 @@ export function activate(context: vscode.ExtensionContext) {
             switch (message.command) {
                 case 'sendMessage':
                     try {
-                        const response = await handleUserMessage(message.message);
+                        // Get relevant context from RAG system
+                        const context = await ragManager.getRelevantContext(message.message);
+                        const response = await handleUserMessage({
+                            ...message.message,
+                            context
+                        });
                         chatPanel?.webview.postMessage({
                             command: 'addMessage',
                             message: {
                                 type: 'assistant',
                                 content: response.content,
-                                timestamp: Date.now(),
-                                codeContext: response.codeContext
+                                timestamp: Date.now()
                             }
                         });
                     } catch (error) {
@@ -110,8 +135,7 @@ export function activate(context: vscode.ExtensionContext) {
                             message: {
                                 type: 'assistant',
                                 content: response.content,
-                                timestamp: Date.now(),
-                                codeContext: response.codeContext
+                                timestamp: Date.now()
                             }
                         });
                     } catch (error) {
@@ -135,6 +159,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposable);
 }
 
+// Keep the old scanWorkspace function for now, but ensure it's not called on activation
+// We can potentially remove it later if it's no longer needed.
 async function scanWorkspace() {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) return;
@@ -152,10 +178,10 @@ async function scanWorkspace() {
             const fileExtension = path.extname(file.fsPath).toLowerCase();
             const language = fileExtension.slice(1);
 
-            // Only process supported code files for now
-            if (!['js', 'ts', 'py', 'java', 'c', 'cpp'].includes(language)) {
-                continue;
-            }
+            // Original file filtering, which we want to avoid in the new RAG system
+            // if (!['js', 'ts', 'py', 'java', 'c', 'cpp'].includes(language)) {
+            //     continue;
+            // }
 
             try {
                 const content = await vscode.workspace.fs.readFile(file);
@@ -341,160 +367,73 @@ function tokenOverlap(a: string, b: string) {
     return overlap / Math.max(aTokens.size, 1);
 }
 
-async function handleUserMessage(message: { content: string; timestamp: number }) {
-    const isCodeImprovement = /improve|refactor|optimize/i.test(message.content);
-    const isExplainRepo = /explain this repository|what is this project|repository overview/i.test(message.content);
-    const isCodeQuestion = /how|what|why|where|when|explain|describe|tell me about/i.test(message.content);
+async function handleUserMessage(message: { content: string; timestamp: number; context?: string }) {
+    // Get relevant context from RAG
+    const context = await ragManager.getRelevantContext(message.content);
 
-    let codeContext: CodeContext | undefined;
-    let assistantResponse = '';
-    let relevantContext = '';
+    // Build the prompt
+    const prompt = context
+        ? `You are an expert code assistant. Use the following code context from the repository to answer the user's question. If the answer is not in the context, say so.\n\nCODE CONTEXT:\n${context}\n\nUSER QUESTION:\n${message.content}\n\nAnswer as helpfully as possible, using the code context above.`
+        : message.content;
 
-    // Extract potential function/class names from the question
-    const functionMatches = message.content.match(/\b(function|method|class)\s+(\w+)\b/i);
-    const nameMatches = message.content.match(/\b(\w+)\s+(function|method|class)\b/i);
-    const directNameMatches = message.content.match(/\b(\w+)\b/g);
-
-    let targetName = '';
-    if (functionMatches) {
-        targetName = functionMatches[2];
-    } else if (nameMatches) {
-        targetName = nameMatches[1];
-    } else if (directNameMatches) {
-        // Try to find the most relevant function/class name from the question
-        for (const name of directNameMatches) {
-            for (const filePath in repoIndex) {
-                const element = repoIndex[filePath].elements.find(el => el.name.toLowerCase() === name.toLowerCase());
-                if (element) {
-                    targetName = name;
-                    break;
-                }
-            }
-            if (targetName) break;
-        }
-    }
-
-    // If we found a target name, get its context
-    if (targetName) {
-        for (const filePath in repoIndex) {
-            const element = repoIndex[filePath].elements.find(el => el.name.toLowerCase() === targetName.toLowerCase());
-            if (element) {
-                codeContext = {
-                    file: filePath,
-                    code: element.code,
-                    language: repoIndex[filePath].language
-                };
-                relevantContext += `Found ${element.type} "${element.name}" in ${filePath}:\n`;
-                if (element.comments && element.comments.length > 0) {
-                    relevantContext += `Comments:\n${element.comments.join('\n')}\n`;
-                }
-                if (element.parameters) {
-                    relevantContext += `Parameters: ${element.parameters.join(', ')}\n`;
-                }
-                if (element.returnType) {
-                    relevantContext += `Return type: ${element.returnType}\n`;
-                }
-                relevantContext += `\nCode:\n${element.code}\n\n`;
-                break;
-            }
-        }
-    }
-
-    // Add general repository context
-    if (Object.keys(repoIndex).length > 0) {
-        relevantContext += 'Repository Overview:\n';
-        for (const filePath in repoIndex) {
-            relevantContext += `- ${filePath} (${repoIndex[filePath].language})\n`;
-            if (repoIndex[filePath].imports && repoIndex[filePath].imports.length > 0) {
-                relevantContext += `  Imports: ${repoIndex[filePath].imports.join(', ')}\n`;
-            }
-            if (repoIndex[filePath].elements.length > 0) {
-                relevantContext += '  Elements:\n';
-                repoIndex[filePath].elements.forEach(el => {
-                    relevantContext += `    - ${el.type}: ${el.name}\n`;
-                });
-            }
-        }
-        relevantContext += '\n';
-    }
-
-    // Construct the prompt
-    let prompt = message.content;
-    if (relevantContext || codeContext) {
-        prompt = `Context from the codebase:\n\n${relevantContext}${codeContext ? `File: ${codeContext.file}\nLanguage: ${codeContext.language}\n\n${codeContext.code}\n\n` : ''}Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
-    } else {
-        prompt = `Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
-    }
-
+    // Use a local LLM pipeline for answering
     try {
-        const { stdout } = await execAsync(`ollama run codellama "${prompt}"`);
-        assistantResponse = stdout.trim();
-    } catch (error) {
-        throw new Error('Failed to get response from Ollama. Please make sure Ollama is running and the model is downloaded.');
+        if (!localLLM) {
+            if (!localLLMLoading) {
+                // Prefer a text2text model for better instruction following
+                localLLMLoading = pipeline('text2text-generation', 'Xenova/flan-t5-small', { quantized: true });
+            }
+            localLLM = await localLLMLoading;
+        }
+        const output = await localLLM(prompt, { max_new_tokens: 256 });
+        const answer = Array.isArray(output) && output[0]?.generated_text ? output[0].generated_text : (output?.generated_text || '');
+        return { content: answer.trim(), codeContext: undefined };
+    } catch (err) {
+        console.error('Local LLM error:', err);
+        return { content: 'Sorry, the local AI model failed to answer your question. Please try again or use the cloud mode.', codeContext: undefined };
     }
-
-    return { content: assistantResponse, codeContext };
 }
 
 async function handleCloudMessage(message: { content: string; timestamp: number }) {
     const apiKey = OPENAI_API_KEY;
-    let codeContext: CodeContext | undefined;
-    const isCodeImprovement = /improve|refactor|optimize/i.test(message.content);
-    const isExplainRepo = /explain this repository|what is this project|repository overview/i.test(message.content);
-
-    let assistantResponse = '';
-    let relevantContext = ''; // Gather relevant info for the prompt
-
-    if (isExplainRepo) {
-         if (Object.keys(repoIndex).length > 0) {
-            assistantResponse = 'This repository contains the following code files and key elements:\n\n';
-            for (const filePath in repoIndex) {
-                assistantResponse += `- ${filePath} (${repoIndex[filePath].language})\n`;
-                 if (repoIndex[filePath].elements.length > 0) {
-                     assistantResponse += '  Elements:\n';
-                     repoIndex[filePath].elements.forEach(el => {
-                         assistantResponse += `    - ${el.type}: ${el.name}\n`;
-                     });
-                 }
+    
+    // Get repository overview
+    let repoContext = '';
+    if (Object.keys(repoIndex).length > 0) {
+        repoContext = 'Repository Structure:\n';
+        for (const filePath in repoIndex) {
+            repoContext += `\nFile: ${filePath}\n`;
+            repoContext += `Language: ${repoIndex[filePath].language}\n`;
+            if (repoIndex[filePath].elements.length > 0) {
+                repoContext += 'Elements:\n';
+                repoIndex[filePath].elements.forEach(el => {
+                    repoContext += `- ${el.type}: ${el.name}\n`;
+                    if (el.comments && el.comments.length > 0) {
+                        repoContext += `  Comments: ${el.comments.join(', ')}\n`;
+                    }
+                });
             }
-            assistantResponse += '\nHow else can I help you with this repository?';
-        } else {
-            assistantResponse = 'I haven\'t finished scanning the repository yet, or the workspace is empty.';
+            repoContext += '\n';
         }
-        return { content: assistantResponse };
+    } else {
+        repoContext = 'No repository files have been indexed yet.';
     }
 
-    // Add relevant repo context to prompt for other questions
-     if (Object.keys(repoIndex).length > 0) {
-         relevantContext += 'Codebase Index Overview:\n';
-         for (const filePath in repoIndex) {
-              relevantContext += `- ${filePath} (${repoIndex[filePath].language})\n`;
-              if (repoIndex[filePath].elements.length > 0) {
-                  relevantContext += '  Elements:\n';
-                  repoIndex[filePath].elements.forEach(el => {
-                      relevantContext += `    - ${el.type}: ${el.name}\n`;
-                  });
-              }
-          }
-          relevantContext += '\n';
-       }
+    // Get relevant context from RAG system
+    const ragContext = await ragManager.getRelevantContext(message.content);
+    
+    // Build the prompt with both repository overview and RAG context
+    const prompt = `You are an expert code assistant. Use the following repository context to answer the user's question.
 
-    if (isCodeImprovement) {
-        const codeMatch = message.content.match(/```(\w+)?\n([\s\S]*?)```/);
-        if (codeMatch) {
-            const language = codeMatch[1] || 'plaintext';
-            const code = codeMatch[2].trim();
-            const similarCode = await findSimilarCode(code);
-            if (similarCode) codeContext = similarCode;
-        }
-    }
+${repoContext}
 
-    let prompt = message.content;
-    if (relevantContext || codeContext) {
-         prompt = `Context from the codebase:\n\n${relevantContext}${codeContext ? `File: ${codeContext.file}\nLanguage: ${codeContext.language}\n\n${codeContext.code}\n\n` : ''}Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
-     } else {
-         prompt = `Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
-     }
+RELEVANT CODE CONTEXT:
+${ragContext || 'No specific code context found.'}
+
+USER QUESTION:
+${message.content}
+
+Please provide a detailed answer based on the repository structure and code context above. If the answer is not in the context, say so. Format your response in a clear and organized way.`;
 
     const response = await fetch(OPENAI_API_URL, {
         method: 'POST',
@@ -505,12 +444,13 @@ async function handleCloudMessage(message: { content: string; timestamp: number 
         body: JSON.stringify({
             model: 'gpt-3.5-turbo',
             messages: [{ role: 'user', content: prompt }],
-            max_tokens: 512
+            max_tokens: 1024
         })
     });
+
     const data = await response.json();
-    assistantResponse = data.choices?.[0]?.message?.content || 'No response from cloud.';
-    return { content: assistantResponse, codeContext };
+    const assistantResponse = data.choices?.[0]?.message?.content || 'No response from cloud.';
+    return { content: assistantResponse };
 }
 
 async function findSimilarCode(code: string): Promise<CodeContext | undefined> {

@@ -28,21 +28,28 @@
         "package": "webpack --mode production --devtool hidden-source-map",
         "compile-webview": "webpack --config webview.webpack.config.js",
         "watch-webview": "webpack --config webview.webpack.config.js --watch",
-        "build": "npm run compile && npm run compile-webview"
+        "build": "npm run compile && npm run compile-webview",
+        "postinstall": "node ./node_modules/vscode/bin/install"
     },
     "dependencies": {
         "@types/react": "^18.2.45",
         "@types/react-dom": "^18.2.18",
+        "@xenova/transformers": "^2.15.0",
         "autoprefixer": "^10.4.17",
+        "hnswlib-node": "^1.4.2",
+        "langchain": "^0.1.0",
         "lucide-react": "^0.475.0",
         "node-fetch": "^2.6.1",
+        "onnxruntime-node": "^1.17.0",
         "postcss": "^8.4.35",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
         "react-markdown": "^8.0.7",
         "react-syntax-highlighter": "^15.5.0",
         "remark-gfm": "^3.0.1",
-        "tailwindcss": "^3.4.1"
+        "sharp": "^0.33.2",
+        "tailwindcss": "^3.4.1",
+        "tiktoken": "^1.0.10"
     },
     "devDependencies": {
         "@types/node": "^20.11.19",
