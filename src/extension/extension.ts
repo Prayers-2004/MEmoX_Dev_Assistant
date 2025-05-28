@@ -20,13 +20,18 @@ interface CodeElement {
     signature?: string;
     startLine: number;
     endLine: number;
+    code: string;
+    comments?: string[];
+    parameters?: string[];
+    returnType?: string;
 }
 
 interface RepoIndex {
     [filePath: string]: {
         language: string;
         elements: CodeElement[];
-        // More detailed structure (comments, etc.) can be added later
+        imports?: string[];
+        fileContent: string;
     };
 }
 
@@ -157,63 +162,144 @@ async function scanWorkspace() {
                 const fileContent = Buffer.from(content).toString('utf-8');
                 const lines = fileContent.split('\n');
                 const elements: CodeElement[] = [];
+                let currentElement: CodeElement | null = null;
+                let currentComments: string[] = [];
+                let imports: string[] = [];
 
-                // Basic regex-based parsing for functions and classes
+                // Extract imports/dependencies
+                lines.forEach(line => {
+                    const importMatch = line.match(/^(?:import|from|require|using)\s+(.+)/);
+                    if (importMatch) {
+                        imports.push(importMatch[1].trim());
+                    }
+                });
+
+                // Process each line for code elements
                 lines.forEach((line, index) => {
                     const lineNumber = index + 1;
                     let match;
 
-                    // Python functions: def function_name(...):
-                    match = line.match(/^\s*def\s+(\w+)\s*\(/);
-                    if (match) {
-                        elements.push({ type: 'function', name: match[1], startLine: lineNumber, endLine: lineNumber }); // Simplified line range
+                    // Collect comments
+                    const commentMatch = line.match(/^\s*(?:\/\/|\#|\/\*|\*)\s*(.+)/);
+                    if (commentMatch) {
+                        currentComments.push(commentMatch[1].trim());
                         return;
                     }
 
-                    // Python classes: class ClassName(...):
-                    match = line.match(/^\s*class\s+(\w+)\s*[:(]/);
+                    // Python functions
+                    match = line.match(/^\s*def\s+(\w+)\s*\((.*?)\)(?:\s*->\s*(\w+))?/);
                     if (match) {
-                        elements.push({ type: 'class', name: match[1], startLine: lineNumber, endLine: lineNumber }); // Simplified line range
+                        if (currentElement) {
+                            const element = currentElement as CodeElement;
+                            element.endLine = lineNumber - 1;
+                            element.code = lines.slice(element.startLine - 1, element.endLine).join('\n');
+                            element.comments = currentComments;
+                            elements.push(element);
+                        }
+                        currentElement = {
+                            type: 'function',
+                            name: match[1],
+                            signature: match[0],
+                            startLine: lineNumber,
+                            endLine: lineNumber,
+                            code: '',
+                            parameters: match[2].split(',').map(p => p.trim()),
+                            returnType: match[3],
+                            comments: []
+                        };
+                        currentComments = [];
                         return;
                     }
 
-                    // JS/TS functions: function functionName(...) or const functionName = (...) =>
-                    match = line.match(/^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*\(.*\)\s*=>\s*)/);
-                     if (match) {
-                         const name = match[1] || match[2];
-                         if(name) elements.push({ type: 'function', name: name, startLine: lineNumber, endLine: lineNumber }); // Simplified line range
-                         return;
-                     }
-
-                     // JS/TS classes: class ClassName
-                     match = line.match(/^\s*class\s+(\w+)/);
-                     if (match) {
-                         elements.push({ type: 'class', name: match[1], startLine: lineNumber, endLine: lineNumber }); // Simplified line range
-                         return;
-                     }
-
-                    // Java/C/C++ functions: returnType functionName(...)
-                    match = line.match(/^\s*\w+\s+(\w+)\s*\(/);
+                    // Python classes
+                    match = line.match(/^\s*class\s+(\w+)\s*(?:\((.*?)\))?:/);
                     if (match) {
-                         // Exclude common keywords that might match (if, for, while, etc.)
-                         const excludeKeywords = ['if', 'for', 'while', 'switch', 'catch'];
-                         if(!excludeKeywords.includes(match[1])) {
-                             elements.push({ type: 'function', name: match[1], startLine: lineNumber, endLine: lineNumber }); // Simplified line range
-                         }
-                         return;
-                     }
+                        if (currentElement) {
+                            const element = currentElement as CodeElement;
+                            element.endLine = lineNumber - 1;
+                            element.code = lines.slice(element.startLine - 1, element.endLine).join('\n');
+                            element.comments = currentComments;
+                            elements.push(element);
+                        }
+                        currentElement = {
+                            type: 'class',
+                            name: match[1],
+                            signature: match[0],
+                            startLine: lineNumber,
+                            endLine: lineNumber,
+                            code: '',
+                            comments: []
+                        };
+                        currentComments = [];
+                        return;
+                    }
 
-                    // Java/C++ classes: class ClassName or struct StructName
-                    match = line.match(/^\s*(?:class|struct)\s+(\w+)/);
+                    // JS/TS functions
+                    match = line.match(/^\s*(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)(?:\s*:\s*(\w+))?\s*=>)/);
                     if (match) {
-                         elements.push({ type: 'class', name: match[1], startLine: lineNumber, endLine: lineNumber }); // Simplified line range
-                         return;
-                     }
+                        if (currentElement) {
+                            const element = currentElement as CodeElement;
+                            element.endLine = lineNumber - 1;
+                            element.code = lines.slice(element.startLine - 1, element.endLine).join('\n');
+                            element.comments = currentComments;
+                            elements.push(element);
+                        }
+                        const name = match[1] || match[2];
+                        if (name) {
+                            currentElement = {
+                                type: 'function',
+                                name: name,
+                                signature: match[0],
+                                startLine: lineNumber,
+                                endLine: lineNumber,
+                                code: '',
+                                parameters: match[3].split(',').map(p => p.trim()),
+                                returnType: match[4],
+                                comments: []
+                            };
+                            currentComments = [];
+                        }
+                        return;
+                    }
+
+                    // JS/TS classes
+                    match = line.match(/^\s*class\s+(\w+)(?:\s+extends\s+(\w+))?/);
+                    if (match) {
+                        if (currentElement) {
+                            const element = currentElement as CodeElement;
+                            element.endLine = lineNumber - 1;
+                            element.code = lines.slice(element.startLine - 1, element.endLine).join('\n');
+                            element.comments = currentComments;
+                            elements.push(element);
+                        }
+                        currentElement = {
+                            type: 'class',
+                            name: match[1],
+                            signature: match[0],
+                            startLine: lineNumber,
+                            endLine: lineNumber,
+                            code: '',
+                            comments: []
+                        };
+                        currentComments = [];
+                        return;
+                    }
                 });
+
+                // Add the last element if exists
+                if (currentElement) {
+                    const element = currentElement as CodeElement;
+                    element.endLine = lines.length;
+                    element.code = lines.slice(element.startLine - 1, element.endLine).join('\n');
+                    element.comments = currentComments;
+                    elements.push(element);
+                }
 
                 repoIndex[relativePath] = {
                     language,
                     elements,
+                    imports,
+                    fileContent
                 };
             } catch (e) {
                 console.error(`Memox: Error reading file ${relativePath}: ${e}`);
@@ -258,62 +344,86 @@ function tokenOverlap(a: string, b: string) {
 async function handleUserMessage(message: { content: string; timestamp: number }) {
     const isCodeImprovement = /improve|refactor|optimize/i.test(message.content);
     const isExplainRepo = /explain this repository|what is this project|repository overview/i.test(message.content);
+    const isCodeQuestion = /how|what|why|where|when|explain|describe|tell me about/i.test(message.content);
 
     let codeContext: CodeContext | undefined;
     let assistantResponse = '';
-    let relevantContext = ''; // Gather relevant info for the prompt
+    let relevantContext = '';
 
-    if (isExplainRepo) {
-        if (Object.keys(repoIndex).length > 0) {
-            assistantResponse = 'This repository contains the following code files and key elements:\n\n';
+    // Extract potential function/class names from the question
+    const functionMatches = message.content.match(/\b(function|method|class)\s+(\w+)\b/i);
+    const nameMatches = message.content.match(/\b(\w+)\s+(function|method|class)\b/i);
+    const directNameMatches = message.content.match(/\b(\w+)\b/g);
+
+    let targetName = '';
+    if (functionMatches) {
+        targetName = functionMatches[2];
+    } else if (nameMatches) {
+        targetName = nameMatches[1];
+    } else if (directNameMatches) {
+        // Try to find the most relevant function/class name from the question
+        for (const name of directNameMatches) {
             for (const filePath in repoIndex) {
-                assistantResponse += `- ${filePath} (${repoIndex[filePath].language})\n`;
-                if (repoIndex[filePath].elements.length > 0) {
-                    assistantResponse += '  Elements:\n';
-                    repoIndex[filePath].elements.forEach(el => {
-                        assistantResponse += `    - ${el.type}: ${el.name}\n`;
-                    });
+                const element = repoIndex[filePath].elements.find(el => el.name.toLowerCase() === name.toLowerCase());
+                if (element) {
+                    targetName = name;
+                    break;
                 }
             }
-            assistantResponse += '\nHow else can I help you with this repository?';
-        } else {
-            assistantResponse = 'I haven\'t finished scanning the repository yet, or the workspace is empty.';
+            if (targetName) break;
         }
-        return { content: assistantResponse };
     }
 
-    // Add relevant repo context to prompt for other questions
-    if (Object.keys(repoIndex).length > 0) {
-        relevantContext += 'Codebase Index Overview:\n';
+    // If we found a target name, get its context
+    if (targetName) {
         for (const filePath in repoIndex) {
-             relevantContext += `- ${filePath} (${repoIndex[filePath].language})\n`;
-             if (repoIndex[filePath].elements.length > 0) {
-                 relevantContext += '  Elements:\n';
-                 repoIndex[filePath].elements.forEach(el => {
-                     relevantContext += `    - ${el.type}: ${el.name}\n`;
-                 });
-             }
-         }
-         relevantContext += '\n';
-    }
-
-    // Existing code context logic for code improvement requests
-    if (isCodeImprovement) {
-        const codeMatch = message.content.match(/```(\w+)?\n([\s\S]*?)```/);
-        if (codeMatch) {
-            const language = codeMatch[1] || 'plaintext';
-            const code = codeMatch[2].trim();
-            const similarCode = await findSimilarCode(code);
-            if (similarCode) codeContext = similarCode;
+            const element = repoIndex[filePath].elements.find(el => el.name.toLowerCase() === targetName.toLowerCase());
+            if (element) {
+                codeContext = {
+                    file: filePath,
+                    code: element.code,
+                    language: repoIndex[filePath].language
+                };
+                relevantContext += `Found ${element.type} "${element.name}" in ${filePath}:\n`;
+                if (element.comments && element.comments.length > 0) {
+                    relevantContext += `Comments:\n${element.comments.join('\n')}\n`;
+                }
+                if (element.parameters) {
+                    relevantContext += `Parameters: ${element.parameters.join(', ')}\n`;
+                }
+                if (element.returnType) {
+                    relevantContext += `Return type: ${element.returnType}\n`;
+                }
+                relevantContext += `\nCode:\n${element.code}\n\n`;
+                break;
+            }
         }
     }
 
-    // Prepare the prompt for Ollama
+    // Add general repository context
+    if (Object.keys(repoIndex).length > 0) {
+        relevantContext += 'Repository Overview:\n';
+        for (const filePath in repoIndex) {
+            relevantContext += `- ${filePath} (${repoIndex[filePath].language})\n`;
+            if (repoIndex[filePath].imports && repoIndex[filePath].imports.length > 0) {
+                relevantContext += `  Imports: ${repoIndex[filePath].imports.join(', ')}\n`;
+            }
+            if (repoIndex[filePath].elements.length > 0) {
+                relevantContext += '  Elements:\n';
+                repoIndex[filePath].elements.forEach(el => {
+                    relevantContext += `    - ${el.type}: ${el.name}\n`;
+                });
+            }
+        }
+        relevantContext += '\n';
+    }
+
+    // Construct the prompt
     let prompt = message.content;
     if (relevantContext || codeContext) {
         prompt = `Context from the codebase:\n\n${relevantContext}${codeContext ? `File: ${codeContext.file}\nLanguage: ${codeContext.language}\n\n${codeContext.code}\n\n` : ''}Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
     } else {
-         prompt = `Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
+        prompt = `Please answer the following question. Format any code snippets using markdown code blocks (\`\`\`language\ncode\n\`\`\`).\n${message.content}`;
     }
 
     try {
